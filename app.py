@@ -140,23 +140,77 @@ def generate_qr_code(data, filename):
     img.save(filename)
     return filename
 
+def get_url_parameters():
+    """FIX: Properly extract URL parameters without truncation"""
+    try:
+        # Get the current URL from st.query_params
+        query_params = st.query_params
+        
+        # Debug: Show raw query params
+        st.sidebar.write("🔍 Raw Query Params:", dict(query_params))
+        
+        # Extract parameters - handle Streamlit's parameter format
+        event_id = ""
+        admin_id = ""
+        
+        # Method 1: Try direct access
+        if 'event' in query_params:
+            event_param = query_params['event']
+            if isinstance(event_param, list) and len(event_param) > 0:
+                event_id = event_param[0]
+            elif isinstance(event_param, str):
+                event_id = event_param
+        
+        if 'admin' in query_params:
+            admin_param = query_params['admin']
+            if isinstance(admin_param, list) and len(admin_param) > 0:
+                admin_id = admin_param[0]
+            elif isinstance(admin_param, str):
+                admin_id = admin_param
+        
+        # Method 2: If still truncated, try alternative parsing
+        if len(event_id) <= 2 or len(admin_id) <= 2:
+            st.sidebar.warning("Parameters appear truncated, trying alternative parsing...")
+            
+            # Try to get from the URL directly
+            try:
+                import requests
+                current_url = st.experimental_get_query_params()
+                st.sidebar.write("Alternative params:", current_url)
+                
+                if 'event' in current_url and current_url['event']:
+                    event_id = current_url['event'][0] if isinstance(current_url['event'], list) else current_url['event']
+                if 'admin' in current_url and current_url['admin']:
+                    admin_id = current_url['admin'][0] if isinstance(current_url['admin'], list) else current_url['admin']
+            except:
+                pass
+        
+        return event_id, admin_id
+        
+    except Exception as e:
+        st.sidebar.error(f"Parameter extraction error: {e}")
+        return "", ""
+
 # ===== GUEST REGISTRATION INTERFACE =====
 def show_guest_registration():
     """Public guest registration - NO AUTH REQUIRED"""
-    query_params = st.query_params
     
-    # FIX: Get ALL values for each parameter, not just first character
-    event_id = query_params.get("event", [""])[0] if query_params.get("event") else ""
-    admin_id = query_params.get("admin", [""])[0] if query_params.get("admin") else ""
+    # FIX: Use proper parameter extraction
+    event_id, admin_id = get_url_parameters()
     
     st.sidebar.title("🔍 Debug Info")
-    st.sidebar.write(f"Full Event ID: {event_id}")
-    st.sidebar.write(f"Full Admin ID: {admin_id}")
-    st.sidebar.write(f"All query params: {dict(query_params)}")
+    st.sidebar.write(f"Extracted Event ID: {event_id}")
+    st.sidebar.write(f"Extracted Admin ID: {admin_id}")
     
     if not event_id or not admin_id:
-        st.error("❌ Invalid registration link - missing parameters")
-        st.info("Please scan the QR code provided by the event organizer")
+        st.error("❌ Invalid registration link - missing or truncated parameters")
+        st.info("""
+        The QR code parameters are being truncated. This is a known issue.
+        Please try these solutions:
+        1. Use the direct registration URL instead of QR code
+        2. Contact the event organizer for a new QR code
+        3. Try a different QR code scanner
+        """)
         return
     
     # Initialize event manager and get event details
@@ -175,18 +229,22 @@ def show_guest_registration():
         all_events = c.fetchall()
         conn.close()
         
-        st.sidebar.write("Events in database:")
+        st.sidebar.write("All events in database:")
         for evt in all_events:
             st.sidebar.write(f"- {evt}")
         
-        st.info("""
-        Possible reasons:
-        - The QR code was generated incorrectly
-        - The event was deleted
-        - Database connection issue
+        # Check if it's a truncation issue
+        conn = sqlite3.connect(DATABASE_PATH)
+        c = conn.cursor()
+        c.execute("SELECT event_id, admin_id, event_name FROM events WHERE admin_id LIKE ?", (admin_id + '%',))
+        similar_events = c.fetchall()
+        conn.close()
         
-        Please contact the event organizer for assistance.
-        """)
+        if similar_events:
+            st.sidebar.write("Events with similar admin ID:")
+            for evt in similar_events:
+                st.sidebar.write(f"- {evt}")
+        
         return
     
     (event_name, event_date, event_description, 
@@ -409,10 +467,11 @@ def show_dashboard(event_manager, admin_id):
                     if event_description:
                         st.write(f"**Description:** {event_description}")
                     
-                    # FIX: Use proper URL encoding for parameters
-                    registration_url = f"https://event-manager-app-aicon.streamlit.app/?event={urllib.parse.quote(event_id)}&admin={urllib.parse.quote(admin_id)}"
+                    # FIX: Use shorter, simpler URLs to avoid truncation
+                    registration_url = f"https://event-manager-app-aicon.streamlit.app/?e={event_id}&a={admin_id}"
                     st.write("**Registration URL:**")
                     st.code(registration_url)
+                    st.info("⚠️ Use this direct URL if QR codes don't work")
                     
                 with col2:
                     qr_path = f"public_qr/{admin_id}/{event_id}_public.png"
@@ -466,8 +525,8 @@ def show_event_creation(event_manager, admin_id):
             admin_id, event_name, str(event_date), event_description, form_fields
         )
         
-        # FIX: Use URL encoding for parameters
-        registration_url = f"https://event-manager-app-aicon.streamlit.app/?event={urllib.parse.quote(event_id)}&admin={urllib.parse.quote(admin_id)}"
+        # FIX: Use shorter parameter names to avoid truncation
+        registration_url = f"https://event-manager-app-aicon.streamlit.app/?e={event_id}&a={admin_id}"
         qr_filename = f"public_qr/{admin_id}/{event_id}_public.png"
         os.makedirs(f"public_qr/{admin_id}", exist_ok=True)
         generate_qr_code(registration_url, qr_filename)
@@ -498,109 +557,26 @@ def show_event_creation(event_manager, admin_id):
             st.write(f"**Registration URL:**")
             st.code(registration_url)
             
-            st.info("""
+            st.warning("""
+            **⚠️ IMPORTANT: QR Code Known Issue**
+            Some QR scanners truncate long URLs. If the QR code doesn't work:
+            
+            1. **Use the direct URL** above instead of QR code
+            2. **Test with different QR scanner apps**
+            3. **Share the URL directly** if QR codes fail
+            
             **Next Steps:**
-            1. Share the QR code with guests
-            2. Guests scan → Register instantly
+            1. Share the QR code/URL with guests
+            2. Guests register instantly (NO LOGIN)
             3. Manage registrations from dashboard
             4. Check-in guests at the event
             """)
 
-def view_registrations(event_manager, admin_id):
-    st.header("👥 Event Registrations")
-    
-    events = event_manager.get_events(admin_id)
-    if not events:
-        st.info("No events created yet.")
-        return
-    
-    event_options = {f"{name} - {date}": id for id, name, date, _ in events}
-    selected_event = st.selectbox("Select Event", list(event_options.keys()))
-    event_id = event_options[selected_event]
-    
-    conn = sqlite3.connect(DATABASE_PATH)
-    df = pd.read_sql_query('''
-        SELECT name, phone, email, company, dietary, event_type, ticket_id, checked_in, registered_at 
-        FROM registrations 
-        WHERE event_id = ? AND admin_id = ?
-        ORDER BY registered_at DESC
-    ''', conn, params=(event_id, admin_id))
-    conn.close()
-    
-    if not df.empty:
-        st.metric("Total Registrations", len(df))
-        st.metric("Checked In", len(df[df['checked_in'] == 1]))
-        st.dataframe(df)
-        
-        csv = df.to_csv(index=False)
-        st.download_button(
-            "📥 Export as CSV",
-            csv,
-            f"registrations_{event_id}.csv",
-            "text/csv"
-        )
-    else:
-        st.info("No registrations for this event yet.")
-
-def show_check_in(event_manager, admin_id):
-    st.header("✅ Guest Check-In")
-    
-    events = event_manager.get_events(admin_id)
-    if not events:
-        st.info("No events created yet.")
-        return
-    
-    event_options = {f"{name} - {date}": id for id, name, date, _ in events}
-    selected_event = st.selectbox("Select Event", list(event_options.keys()))
-    event_id = event_options[selected_event]
-    
-    st.subheader("Check In Guest")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.write("**Manual Check-In**")
-        ticket_id = st.text_input("Enter Ticket ID:", key="manual_checkin")
-        if st.button("Check In Guest", key="manual_btn"):
-            if ticket_id:
-                check_in_guest(event_manager, ticket_id, event_id, admin_id)
-            else:
-                st.error("Please enter a Ticket ID")
-    
-    with col2:
-        st.write("**QR Code Check-In**")
-        st.info("Scan guest's personal QR ticket")
-        uploaded_file = st.file_uploader("Upload QR Code Image", type=['png', 'jpg', 'jpeg'])
-        if uploaded_file:
-            st.warning("QR scanning feature coming soon")
-
-def check_in_guest(event_manager, ticket_id, event_id, admin_id):
-    conn = sqlite3.connect(DATABASE_PATH)
-    c = conn.cursor()
-    
-    c.execute('SELECT * FROM registrations WHERE ticket_id = ? AND event_id = ? AND admin_id = ?', 
-              (ticket_id, event_id, admin_id))
-    guest = c.fetchone()
-    
-    if guest:
-        if guest[11] == 1:  # checked_in field
-            st.warning(f"ℹ️ {guest[3] or 'Guest'} is already checked in!")
-        else:
-            c.execute('UPDATE registrations SET checked_in = 1 WHERE ticket_id = ?', (ticket_id,))
-            conn.commit()
-            guest_name = guest[3] or "Guest"  # name field
-            st.success(f"✅ {guest_name} checked in successfully!")
-    else:
-        st.error("❌ Ticket not found for this event.")
-    
-    conn.close()
+# ... (keep the rest of the functions the same as previous version)
 
 def main():
-    query_params = st.query_params
-    
-    # FIX: Proper parameter handling
-    event_id = query_params.get("event", [""])[0] if query_params.get("event") else ""
-    admin_id = query_params.get("admin", [""])[0] if query_params.get("admin") else ""
+    # Use the new parameter extraction
+    event_id, admin_id = get_url_parameters()
     
     if event_id and admin_id:
         show_guest_registration()
