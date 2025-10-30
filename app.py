@@ -53,24 +53,24 @@ class EventManager:
         conn.commit()
         conn.close()
     
-    def create_event(self, event_name, event_date):
-        """Create a new event and generate public registration QR"""
-        event_id = f"EVENT-{self.sanitize_id(event_name)}-{int(time.time())}"
-        
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        c.execute('INSERT INTO events (event_id, event_name, event_date) VALUES (?, ?, ?)',
-                  (event_id, event_name, event_date))
-        conn.commit()
-        conn.close()
-        
-        # Generate public registration QR code
-        registration_url = f"https://event-manager-app-aicon.streamlit.app/?page=register&event={event_id}&admin={self.admin_id}"
-        public_qr_filename = f"public_qr/{self.sanitize_id(self.admin_id)}/{event_id}_public.png"
-        os.makedirs(f"public_qr/{self.sanitize_id(self.admin_id)}", exist_ok=True)
-        generate_qr_code(registration_url, public_qr_filename)
-        
-        return event_id, public_qr_filename
+  def create_event(self, event_name, event_date):
+    """Create a new event and generate public registration QR"""
+    event_id = f"EVENT-{self.sanitize_id(event_name)}-{int(time.time())}"
+    
+    conn = sqlite3.connect(self.db_path)
+    c = conn.cursor()
+    c.execute('INSERT INTO events (event_id, event_name, event_date) VALUES (?, ?, ?)',
+              (event_id, event_name, event_date))
+    conn.commit()
+    conn.close()
+    
+    # Generate public registration QR code - UPDATED URL
+    registration_url = f"https://event-manager-app-aicon.streamlit.app/?page=register&event={event_id}&admin={self.admin_id}"
+    public_qr_filename = f"public_qr/{self.sanitize_id(self.admin_id)}/{event_id}_public.png"
+    os.makedirs(f"public_qr/{self.sanitize_id(self.admin_id)}", exist_ok=True)
+    generate_qr_code(registration_url, public_qr_filename)
+    
+    return event_id, public_qr_filename
     
     def get_events(self):
         """Get all events for this admin"""
@@ -274,14 +274,12 @@ def show_event_creation(event_manager):
             4. Export data after the event
             """)
             
-            # Show the registration URL for testing
+            # Show the registration URL for testing - UPDATED URL
             st.subheader("Registration Link")
             registration_url = f"https://event-manager-app-aicon.streamlit.app/?page=register&event={event_id}&admin={event_manager.admin_id}"
             st.markdown(f'[**Click to test registration**]({registration_url})')
             st.code(registration_url)
             st.success("✅ Public registration - NO AUTHENTICATION REQUIRED")
-
-# ... KEEP public_registration, show_check_in, view_registrations, export_data FUNCTIONS EXACTLY AS BEFORE ...
 
 def main():
     # Page routing
@@ -303,4 +301,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
