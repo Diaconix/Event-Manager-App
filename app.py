@@ -13,30 +13,24 @@ st.set_page_config(
     layout="wide"
 )
 
+# SINGLE DATABASE FILE - Shared across all sessions
+DATABASE_PATH = "event_manager.db"
+
 class EventManager:
-    def __init__(self, admin_id):
-        self.admin_id = admin_id
-        self.sanitized_id = self.sanitize_id(admin_id)
-        self.db_path = f"databases/events_{self.sanitized_id}.db"
+    def __init__(self):
+        self.db_path = DATABASE_PATH
         os.makedirs("databases", exist_ok=True)
         self.init_db()
-    
-    def sanitize_id(self, admin_id):
-        """Sanitize admin ID for filename safety"""
-        return "".join(c for c in admin_id if c.isalnum() or c in ('-', '_')).rstrip()
     
     def init_db(self):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         
-        # Drop tables if they exist to avoid schema conflicts
-        c.execute('DROP TABLE IF EXISTS events')
-        c.execute('DROP TABLE IF EXISTS registrations')
-        
-        # Create events table with correct schema
+        # Events table with admin_id to separate organizations
         c.execute('''
-            CREATE TABLE events (
+            CREATE TABLE IF NOT EXISTS events (
                 event_id TEXT PRIMARY KEY,
+                admin_id TEXT NOT NULL,
                 event_name TEXT NOT NULL,
                 event_date TEXT,
                 event_description TEXT,
@@ -49,11 +43,12 @@ class EventManager:
             )
         ''')
         
-        # Create registrations table
+        # Registrations table
         c.execute('''
-            CREATE TABLE registrations (
+            CREATE TABLE IF NOT EXISTS registrations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_id TEXT NOT NULL,
+                admin_id TEXT NOT NULL,
                 name TEXT,
                 phone TEXT,
                 email TEXT,
@@ -69,23 +64,23 @@ class EventManager:
         conn.commit()
         conn.close()
     
-    def create_event(self, event_name, event_date, event_description, form_fields):
+    def create_event(self, admin_id, event_name, event_date, event_description, form_fields):
         """Create a new event in the database"""
-        event_id = f"EVENT-{self.sanitize_id(event_name)}-{int(time.time())}"
+        event_id = f"EVENT-{event_name.replace(' ', '-')}-{int(time.time())}"
         
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         
-        # FIXED: Clean SQL with proper parameter binding
         sql = '''
             INSERT INTO events 
-            (event_id, event_name, event_date, event_description, 
+            (event_id, admin_id, event_name, event_date, event_description, 
              collect_name, collect_phone, collect_email, collect_company, collect_dietary) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         '''
         
         params = (
             event_id, 
+            admin_id,
             event_name, 
             event_date, 
             event_description or "",
@@ -102,14 +97,33 @@ class EventManager:
         
         return event_id
     
-    def get_events(self):
+    def get_events(self, admin_id):
         """Get all events for this admin"""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute('SELECT event_id, event_name, event_date, event_description FROM events ORDER BY created_at DESC')
+        c.execute('''
+            SELECT event_id, event_name, event_date, event_description 
+            FROM events 
+            WHERE admin_id = ?
+            ORDER BY created_at DESC
+        ''', (admin_id,))
         events = c.fetchall()
         conn.close()
         return events
+    
+    def get_event_details(self, event_id, admin_id):
+        """Get specific event details"""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''
+            SELECT event_name, event_date, event_description, 
+                   collect_name, collect_phone, collect_email, collect_company, collect_dietary
+            FROM events 
+            WHERE event_id = ? AND admin_id = ?
+        ''', (event_id, admin_id))
+        event_data = c.fetchone()
+        conn.close()
+        return event_data
 
 def generate_qr_code(data, filename):
     """Generate QR code image"""
@@ -125,34 +139,6 @@ def generate_qr_code(data, filename):
     img.save(filename)
     return filename
 
-def sanitize_admin_id(admin_id):
-    """Consistent sanitization function"""
-    return "".join(c for c in admin_id if c.isalnum() or c in ('-', '_')).rstrip()
-
-def get_event_details(admin_id, event_id):
-    """Get event details from database"""
-    try:
-        sanitized_admin_id = sanitize_admin_id(admin_id)
-        db_path = f"databases/events_{sanitized_admin_id}.db"
-        
-        if not os.path.exists(db_path):
-            return None
-        
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
-        c.execute('''
-            SELECT event_name, event_date, event_description, 
-                   collect_name, collect_phone, collect_email, collect_company, collect_dietary
-            FROM events WHERE event_id = ?
-        ''', (event_id,))
-        event_data = c.fetchone()
-        conn.close()
-        
-        return event_data
-    except Exception as e:
-        st.error(f"Database error: {str(e)}")
-        return None
-
 # ===== GUEST REGISTRATION INTERFACE =====
 def show_guest_registration():
     """Public guest registration - NO AUTH REQUIRED"""
@@ -160,19 +146,37 @@ def show_guest_registration():
     event_id = query_params.get("event", [""])[0]
     admin_id = query_params.get("admin", [""])[0]
     
+    st.sidebar.title("🔍 Debug Info")
+    st.sidebar.write(f"Event ID: {event_id}")
+    st.sidebar.write(f"Admin ID: {admin_id}")
+    
     if not event_id or not admin_id:
-        st.error("❌ Invalid registration link")
+        st.error("❌ Invalid registration link - missing parameters")
+        st.info("Please scan the QR code provided by the event organizer")
         return
     
-    event_data = get_event_details(admin_id, event_id)
+    # Initialize event manager and get event details
+    event_manager = EventManager()
+    event_data = event_manager.get_event_details(event_id, admin_id)
+    
+    st.sidebar.write(f"Event found: {event_data is not None}")
     
     if not event_data:
-        st.error("❌ Event not found")
+        st.error("❌ Event not found in database")
+        st.info("""
+        Possible reasons:
+        - The event was deleted
+        - The QR code is incorrect
+        - The event organizer changed their settings
+        
+        Please contact the event organizer for assistance.
+        """)
         return
     
     (event_name, event_date, event_description, 
      collect_name, collect_phone, collect_email, collect_company, collect_dietary) = event_data
     
+    # Show event header
     st.title("🎟️ Event Registration")
     st.success(f"**{event_name}**")
     st.write(f"**Date:** {event_date}")
@@ -180,6 +184,7 @@ def show_guest_registration():
         st.write(f"**About:** {event_description}")
     st.markdown("---")
     
+    # Registration form
     with st.form("registration_form", clear_on_submit=True):
         st.subheader("Your Information")
         
@@ -206,6 +211,7 @@ def show_guest_registration():
         submitted = st.form_submit_button("Register Now 🎫")
         
         if submitted:
+            # Validate required fields
             required_fields = []
             if collect_name and not form_data.get('name'):
                 required_fields.append("Full Name")
@@ -220,19 +226,17 @@ def show_guest_registration():
                 st.error(f"❌ Please fill in: {', '.join(required_fields)}")
             else:
                 try:
-                    sanitized_admin_id = sanitize_admin_id(admin_id)
-                    db_path = f"databases/events_{sanitized_admin_id}.db"
-                    
+                    # Save registration to database
                     phone = form_data.get('phone', '')
                     ticket_id = f"TKT-{phone}-{int(time.time())}" if phone else f"TKT-{int(time.time())}"
                     
-                    conn = sqlite3.connect(db_path)
+                    conn = sqlite3.connect(DATABASE_PATH)
                     c = conn.cursor()
                     c.execute('''
                         INSERT INTO registrations 
-                        (event_id, name, phone, email, company, dietary, event_type, ticket_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (event_id, 
+                        (event_id, admin_id, name, phone, email, company, dietary, event_type, ticket_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (event_id, admin_id,
                           form_data.get('name'), 
                           form_data.get('phone'),
                           form_data.get('email'),
@@ -244,11 +248,14 @@ def show_guest_registration():
                     conn.close()
                     
                     st.success("✅ Registration Complete!")
+                    st.balloons()
                     
+                    # Generate personal QR ticket
                     qr_filename = f"personal_qr/{ticket_id}.png"
                     os.makedirs("personal_qr", exist_ok=True)
                     generate_qr_code(ticket_id, qr_filename)
                     
+                    # Show ticket
                     col1, col2 = st.columns([1, 2])
                     with col1:
                         st.image(qr_filename, caption="Your Entry QR Code")
@@ -270,10 +277,11 @@ def show_guest_registration():
                         st.write(f"**Event:** {event_name}")
                         st.write(f"**Date:** {event_date}")
                         st.write(f"**Ticket ID:** `{ticket_id}`")
-                        st.warning("**💡 Save this QR code for entry!**")
+                        st.warning("**💡 Save this QR code! You'll need it for entry.**")
                         
                 except Exception as e:
                     st.error(f"❌ Registration failed: {str(e)}")
+                    st.info("Please try again or contact the event organizer.")
 
 # ===== ADMIN INTERFACE =====
 def admin_auth():
@@ -326,7 +334,7 @@ def admin_auth():
 
 def admin_dashboard():
     admin_id = st.session_state['admin_id']
-    event_manager = EventManager(admin_id)
+    event_manager = EventManager()
     
     st.sidebar.title(f"👤 {admin_id}")
     st.sidebar.success("Admin Portal")
@@ -348,22 +356,22 @@ def admin_dashboard():
     elif menu == "🎪 Create Event":
         show_event_creation(event_manager, admin_id)
     elif menu == "👥 View Registrations":
-        view_registrations(event_manager)
+        view_registrations(event_manager, admin_id)
     elif menu == "✅ Check-In":
-        show_check_in(event_manager)
+        show_check_in(event_manager, admin_id)
 
 def show_dashboard(event_manager, admin_id):
     st.header("📊 Dashboard")
     
-    events = event_manager.get_events()
+    events = event_manager.get_events(admin_id)
     
     total_events = len(events)
     total_registrations = 0
     
-    conn = sqlite3.connect(event_manager.db_path)
+    conn = sqlite3.connect(DATABASE_PATH)
     for event_id, _, _, _ in events:
         c = conn.cursor()
-        c.execute('SELECT COUNT(*) FROM registrations WHERE event_id = ?', (event_id,))
+        c.execute('SELECT COUNT(*) FROM registrations WHERE event_id = ? AND admin_id = ?', (event_id, admin_id))
         count = c.fetchone()[0]
         total_registrations += count
     conn.close()
@@ -390,8 +398,8 @@ def show_dashboard(event_manager, admin_id):
                     st.code(registration_url)
                     
                 with col2:
-                    qr_path = f"public_qr/{event_manager.sanitized_id}/{event_id}_public.png"
-                    os.makedirs(f"public_qr/{event_manager.sanitized_id}", exist_ok=True)
+                    qr_path = f"public_qr/{admin_id}/{event_id}_public.png"
+                    os.makedirs(f"public_qr/{admin_id}", exist_ok=True)
                     generate_qr_code(registration_url, qr_path)
                     st.image(qr_path, width=150)
                     st.info("**Share this QR code**")
@@ -438,15 +446,20 @@ def show_event_creation(event_manager, admin_id):
         }
         
         event_id = event_manager.create_event(
-            event_name, str(event_date), event_description, form_fields
+            admin_id, event_name, str(event_date), event_description, form_fields
         )
         
         registration_url = f"https://event-manager-app-aicon.streamlit.app/?event={event_id}&admin={admin_id}"
-        qr_filename = f"public_qr/{event_manager.sanitized_id}/{event_id}_public.png"
-        os.makedirs(f"public_qr/{event_manager.sanitized_id}", exist_ok=True)
+        qr_filename = f"public_qr/{admin_id}/{event_id}_public.png"
+        os.makedirs(f"public_qr/{admin_id}", exist_ok=True)
         generate_qr_code(registration_url, qr_filename)
         
         st.success("🎉 Event Created Successfully!")
+        
+        # Debug info
+        st.sidebar.success("✅ Event saved to database!")
+        st.sidebar.write(f"Event ID: {event_id}")
+        st.sidebar.write(f"Admin ID: {admin_id}")
         
         col1, col2 = st.columns([1, 2])
         with col1:
@@ -474,10 +487,10 @@ def show_event_creation(event_manager, admin_id):
             4. Check-in guests at the event
             """)
 
-def view_registrations(event_manager):
+def view_registrations(event_manager, admin_id):
     st.header("👥 Event Registrations")
     
-    events = event_manager.get_events()
+    events = event_manager.get_events(admin_id)
     if not events:
         st.info("No events created yet.")
         return
@@ -486,13 +499,13 @@ def view_registrations(event_manager):
     selected_event = st.selectbox("Select Event", list(event_options.keys()))
     event_id = event_options[selected_event]
     
-    conn = sqlite3.connect(event_manager.db_path)
+    conn = sqlite3.connect(DATABASE_PATH)
     df = pd.read_sql_query('''
         SELECT name, phone, email, company, dietary, event_type, ticket_id, checked_in, registered_at 
         FROM registrations 
-        WHERE event_id = ?
+        WHERE event_id = ? AND admin_id = ?
         ORDER BY registered_at DESC
-    ''', conn, params=(event_id,))
+    ''', conn, params=(event_id, admin_id))
     conn.close()
     
     if not df.empty:
@@ -510,10 +523,10 @@ def view_registrations(event_manager):
     else:
         st.info("No registrations for this event yet.")
 
-def show_check_in(event_manager):
+def show_check_in(event_manager, admin_id):
     st.header("✅ Guest Check-In")
     
-    events = event_manager.get_events()
+    events = event_manager.get_events(admin_id)
     if not events:
         st.info("No events created yet.")
         return
@@ -531,7 +544,7 @@ def show_check_in(event_manager):
         ticket_id = st.text_input("Enter Ticket ID:", key="manual_checkin")
         if st.button("Check In Guest", key="manual_btn"):
             if ticket_id:
-                check_in_guest(event_manager, ticket_id, event_id)
+                check_in_guest(event_manager, ticket_id, event_id, admin_id)
             else:
                 st.error("Please enter a Ticket ID")
     
@@ -542,20 +555,21 @@ def show_check_in(event_manager):
         if uploaded_file:
             st.warning("QR scanning feature coming soon")
 
-def check_in_guest(event_manager, ticket_id, event_id):
-    conn = sqlite3.connect(event_manager.db_path)
+def check_in_guest(event_manager, ticket_id, event_id, admin_id):
+    conn = sqlite3.connect(DATABASE_PATH)
     c = conn.cursor()
     
-    c.execute('SELECT * FROM registrations WHERE ticket_id = ? AND event_id = ?', (ticket_id, event_id))
+    c.execute('SELECT * FROM registrations WHERE ticket_id = ? AND event_id = ? AND admin_id = ?', 
+              (ticket_id, event_id, admin_id))
     guest = c.fetchone()
     
     if guest:
-        if guest[9] == 1:
-            st.warning(f"ℹ️ {guest[1] or 'Guest'} is already checked in!")
+        if guest[11] == 1:  # checked_in field
+            st.warning(f"ℹ️ {guest[3] or 'Guest'} is already checked in!")
         else:
             c.execute('UPDATE registrations SET checked_in = 1 WHERE ticket_id = ?', (ticket_id,))
             conn.commit()
-            guest_name = guest[1] or "Guest"
+            guest_name = guest[3] or "Guest"  # name field
             st.success(f"✅ {guest_name} checked in successfully!")
     else:
         st.error("❌ Ticket not found for this event.")
