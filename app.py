@@ -210,7 +210,6 @@ def show_event_creation(event_manager):
         
         submitted = st.form_submit_button("Create Event & Generate QR Code 🎫")
     
-    # MOVE EVERYTHING AFTER THE FORM SUBMISSION OUTSIDE THE FORM
     if submitted and event_name:
         event_id, qr_filename = event_manager.create_event(event_name, str(event_date))
         
@@ -221,7 +220,7 @@ def show_event_creation(event_manager):
             st.image(qr_filename, caption="Public Registration QR Code")
             st.info("**Share this QR code for guest registration**")
             
-            # Download QR code - NOW OUTSIDE THE FORM
+            # Download QR code
             with open(qr_filename, 'rb') as f:
                 qr_data = f.read()
             st.download_button(
@@ -247,9 +246,9 @@ def show_event_creation(event_manager):
             4. Export data after the event
             """)
             
-            # Show the registration URL for testing
+            # Show the registration URL for testing - FIXED THIS LINE
             st.subheader("Registration Link (for testing)")
-            registration_url = f"https://event-manager-app.streamlit.app/?page=register&event={event_id}&admin={self.admin_id}"
+            registration_url = f"https://event-manager-app.streamlit.app/?page=register&event={event_id}&admin={event_manager.admin_id}"
             st.code(registration_url, language="text")
             st.write("This is the URL that your QR code points to.")
 
@@ -509,3 +508,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
