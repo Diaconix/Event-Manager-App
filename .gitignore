@@ -1,0 +1,26 @@
+# Auto-generated folders (contain user data - DO NOT UPLOAD!)
+databases/
+public_qr/ 
+personal_qr/
+exports/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables
+.env
+.venv
+env/
+venv/
+
+# Secret files
+.secrets/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
