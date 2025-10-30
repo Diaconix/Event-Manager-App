@@ -66,14 +66,23 @@ class EventManager:
         
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
+        
+        # FIXED: Correct number of parameters in INSERT statement
         c.execute('''
             INSERT INTO events (event_id, event_name, event_date, event_description, 
                               collect_name, collect_phone, collect_email, collect_company, collect_dietary)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (event_id, event_name, event_date, event_description,
-              form_fields.get('name', 1), form_fields.get('phone', 1), 
-              form_fields.get('email', 1), form_fields.get('company', 0),
-              form_fields.get('dietary', 0)))
+        ''', (
+            event_id, 
+            event_name, 
+            event_date, 
+            event_description,
+            form_fields.get('name', 1), 
+            form_fields.get('phone', 1), 
+            form_fields.get('email', 1), 
+            form_fields.get('company', 0),
+            form_fields.get('dietary', 0)
+        ))
         conn.commit()
         conn.close()
         
