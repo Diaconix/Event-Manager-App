@@ -65,7 +65,7 @@ class EventManager:
         conn.close()
         
         # Generate public registration QR code
-        registration_url = f"https://event-manager-app.streamlit.app/?page=register&event={event_id}&admin={self.admin_id}"
+        registration_url = f"https://event-manager-app-aicon.streamlit.app/?page=register&event={event_id}&admin={self.admin_id}"
         public_qr_filename = f"public_qr/{self.sanitize_id(self.admin_id)}/{event_id}_public.png"
         os.makedirs(f"public_qr/{self.sanitize_id(self.admin_id)}", exist_ok=True)
         generate_qr_code(registration_url, public_qr_filename)
@@ -276,7 +276,7 @@ def show_event_creation(event_manager):
             
             # Show the registration URL for testing
             st.subheader("Registration Link")
-            registration_url = f"https://event-manager-app.streamlit.app/?page=register&event={event_id}&admin={event_manager.admin_id}"
+            registration_url = f"https://event-manager-app-aicon.streamlit.app/?page=register&event={event_id}&admin={event_manager.admin_id}"
             st.markdown(f'[**Click to test registration**]({registration_url})')
             st.code(registration_url)
             st.success("✅ Public registration - NO AUTHENTICATION REQUIRED")
@@ -303,3 +303,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
