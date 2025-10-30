@@ -16,9 +16,14 @@ st.set_page_config(
     layout="wide"
 )
 
-# Gemini AI Configuration (you'll get these from Google AI Studio)
-GEMINI_API_KEY = "your-gemini-api-key"  # Get from: https://aistudio.google.com/
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+# Gemini AI Configuration - Using Streamlit Secrets
+try:
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+    GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+except:
+    GEMINI_API_KEY = None
+    GEMINI_URL = None
+    st.sidebar.warning("Gemini API key not configured - using fallback templates")
 
 class EventManager:
     def __init__(self, admin_id):
@@ -39,14 +44,38 @@ class EventManager:
              event_name TEXT NOT NULL,
              event_date TEXT,
              event_description TEXT,
-             google_form_url TEXT,
+             form_url TEXT,
              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+        ''')
+        # Registrations table for storing form submissions
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS registrations
+            (id INTEGER PRIMARY KEY AUTOINCREMENT,
+             event_id TEXT NOT NULL,
+             name TEXT NOT NULL,
+             phone TEXT NOT NULL,
+             email TEXT NOT NULL,
+             event_type TEXT NOT NULL,
+             ticket_id TEXT UNIQUE NOT NULL,
+             registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+             checked_in INTEGER DEFAULT 0,
+             FOREIGN KEY (event_id) REFERENCES events (event_id))
         ''')
         conn.commit()
         conn.close()
     
     def generate_event_form_with_ai(self, event_name, event_date, event_description):
-        """Use Gemini AI to generate a professional form description and questions"""
+        """Use Gemini AI to generate a professional form description"""
+        # Fallback template if no API key
+        fallback_content = {
+            "form_title": f"Event Registration: {event_name}",
+            "form_description": f"Join us for {event_name} on {event_date}! We're excited to have you. Please complete your registration below.",
+            "welcome_message": "Thank you for registering! You'll receive your digital ticket via email shortly."
+        }
+        
+        if not GEMINI_API_KEY:
+            return fallback_content
+            
         try:
             prompt = f"""
             Create a professional event registration form description for: {event_name} on {event_date}.
@@ -58,6 +87,7 @@ class EventManager:
                 "form_description": "Professional, welcoming description inviting people to register",
                 "welcome_message": "Brief thank you message after registration"
             }}
+            Make it engaging and professional.
             """
             
             headers = {
@@ -70,7 +100,7 @@ class EventManager:
                 }]
             }
             
-            response = requests.post(GEMINI_URL, headers=headers, json=data)
+            response = requests.post(GEMINI_URL, headers=headers, json=data, timeout=30)
             response_data = response.json()
             
             if 'candidates' in response_data:
@@ -81,131 +111,40 @@ class EventManager:
                 if json_match:
                     return json.loads(json_match.group())
             
-            # Fallback if AI fails
-            return {
-                "form_title": f"Event Registration: {event_name}",
-                "form_description": f"Join us for {event_name} on {event_date}! Please register below.",
-                "welcome_message": "Thank you for registering! See you at the event!"
-            }
+            return fallback_content
             
         except Exception as e:
-            st.error(f"AI form generation failed: {e}")
-            # Fallback template
-            return {
-                "form_title": f"Event Registration: {event_name}",
-                "form_description": f"Join us for {event_name} on {event_date}! Please register below.",
-                "welcome_message": "Thank you for registering! See you at the event!"
-            }
+            st.sidebar.error(f"AI generation failed: {str(e)}")
+            return fallback_content
     
-    def create_google_form_automatically(self, event_name, event_date, event_description=""):
-        """Create a Google Form automatically using their API"""
-        try:
-            # Generate form content with AI
-            form_content = self.generate_event_form_with_ai(event_name, event_date, event_description)
-            
-            # For now, we'll create a template form structure
-            # In production, you'd use Google Forms API
-            
-            form_template = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>{form_content['form_title']}</title>
-                <style>
-                    body {{ font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }}
-                    .header {{ background: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 20px; }}
-                    .form-group {{ margin-bottom: 15px; }}
-                    label {{ display: block; margin-bottom: 5px; font-weight: bold; }}
-                    input, select {{ width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }}
-                    button {{ background: #FF4B4B; color: white; padding: 12px 30px; border: none; border-radius: 5px; cursor: pointer; }}
-                </style>
-            </head>
-            <body>
-                <div class="header">
-                    <h1>{form_content['form_title']}</h1>
-                    <p>{form_content['form_description']}</p>
-                </div>
-                
-                <form action="#" method="post">
-                    <div class="form-group">
-                        <label for="name">Full Name *</label>
-                        <input type="text" id="name" name="name" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="phone">Phone Number *</label>
-                        <input type="tel" id="phone" name="phone" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="email">Email Address *</label>
-                        <input type="email" id="email" name="email" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="package">Event Package *</label>
-                        <select id="package" name="package" required>
-                            <option value="">Select a package</option>
-                            <option value="Karaoke Only">Karaoke Only</option>
-                            <option value="Karaoke + Paint & Sip">Karaoke + Paint & Sip</option>
-                        </select>
-                    </div>
-                    
-                    <button type="submit">Register Now</button>
-                </form>
-                
-                <div id="thankYou" style="display: none; margin-top: 20px; padding: 20px; background: #d4edda; border-radius: 5px;">
-                    <h3>✅ {form_content['welcome_message']}</h3>
-                    <p>You will receive a confirmation email shortly with your QR code ticket.</p>
-                </div>
-                
-                <script>
-                    document.querySelector('form').addEventListener('submit', function(e) {{
-                        e.preventDefault();
-                        document.querySelector('form').style.display = 'none';
-                        document.getElementById('thankYou').style.display = 'block';
-                        // In production, this would submit to your backend
-                    }});
-                </script>
-            </body>
-            </html>
-            """
-            
-            # Save the form as HTML file
-            event_id = f"EVENT-{self.sanitize_id(event_name)}-{int(time.time())}"
-            form_filename = f"forms/{self.sanitize_id(self.admin_id)}/{event_id}.html"
-            os.makedirs(f"forms/{self.sanitize_id(self.admin_id)}", exist_ok=True)
-            
-            with open(form_filename, 'w', encoding='utf-8') as f:
-                f.write(form_template)
-            
-            # For now, we'll host it on the same Streamlit app
-            form_url = f"https://event-manager-app-aicon.streamlit.app/?page=form&event={event_id}&admin={self.admin_id}"
-            
-            # Save event to database
-            conn = sqlite3.connect(self.db_path)
-            c = conn.cursor()
-            c.execute('INSERT INTO events (event_id, event_name, event_date, event_description, google_form_url) VALUES (?, ?, ?, ?, ?)',
-                      (event_id, event_name, event_date, event_description, form_url))
-            conn.commit()
-            conn.close()
-            
-            return event_id, form_url
-            
-        except Exception as e:
-            st.error(f"Form creation failed: {e}")
-            # Fallback: Create a simple event record
-            event_id = f"EVENT-{self.sanitize_id(event_name)}-{int(time.time())}"
-            form_url = f"https://event-manager-app-aicon.streamlit.app/?page=form&event={event_id}&admin={self.admin_id}"
-            
-            conn = sqlite3.connect(self.db_path)
-            c = conn.cursor()
-            c.execute('INSERT INTO events (event_id, event_name, event_date, event_description, google_form_url) VALUES (?, ?, ?, ?, ?)',
-                      (event_id, event_name, event_date, event_description, form_url))
-            conn.commit()
-            conn.close()
-            
-            return event_id, form_url
+    def create_event_with_form(self, event_name, event_date, event_description=""):
+        """Create a new event with automatic form generation"""
+        event_id = f"EVENT-{self.sanitize_id(event_name)}-{int(time.time())}"
+        
+        # Generate form content
+        form_content = self.generate_event_form_with_ai(event_name, event_date, event_description)
+        
+        # Create form URL that points to our custom form page
+        form_url = f"https://event-manager-app-aicon.streamlit.app/?page=register&event={event_id}&admin={self.admin_id}"
+        
+        # Save event to database
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('INSERT INTO events (event_id, event_name, event_date, event_description, form_url) VALUES (?, ?, ?, ?, ?)',
+                  (event_id, event_name, event_date, event_description, form_url))
+        conn.commit()
+        conn.close()
+        
+        return event_id, form_url, form_content
+    
+    def get_events(self):
+        """Get all events for this admin"""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('SELECT event_id, event_name, event_date, event_description, form_url FROM events ORDER BY created_at DESC')
+        events = c.fetchall()
+        conn.close()
+        return events
 
 def generate_qr_code(data, filename):
     qr = qrcode.QRCode(
@@ -220,9 +159,15 @@ def generate_qr_code(data, filename):
     img.save(filename)
     return filename
 
-def show_custom_form(event_id, admin_id):
-    """Show a custom registration form within the app"""
-    st.title("🎟️ Event Registration")
+def public_registration_form():
+    """Public registration form - NO AUTHENTICATION REQUIRED"""
+    query_params = st.query_params
+    event_id = query_params.get("event", [""])[0]
+    admin_id = query_params.get("admin", [""])[0]
+    
+    if not event_id or not admin_id:
+        st.error("❌ Invalid registration link")
+        return
     
     # Get event details
     event_manager = EventManager(admin_id)
@@ -233,18 +178,21 @@ def show_custom_form(event_id, admin_id):
     conn.close()
     
     if not event_data:
-        st.error("Event not found")
+        st.error("❌ Event not found")
         return
     
     event_name, event_date, event_description = event_data
     
-    st.success(f"Register for: **{event_name}**")
+    # Show event header
+    st.title("🎟️ Event Registration")
+    st.success(f"**{event_name}**")
     st.write(f"**Date:** {event_date}")
     if event_description:
-        st.write(f"**Description:** {event_description}")
+        st.write(f"**About:** {event_description}")
     st.markdown("---")
     
-    with st.form("registration_form"):
+    # Registration form
+    with st.form("registration_form", clear_on_submit=True):
         st.subheader("Your Information")
         
         col1, col2 = st.columns(2)
@@ -260,39 +208,64 @@ def show_custom_form(event_id, admin_id):
         
         if submitted:
             if name and phone and email and event_type != "Select package":
-                # Generate ticket
+                # Generate unique ticket ID
                 ticket_id = f"TKT-{phone}-{int(time.time())}"
                 
-                # Save registration (you'd save to database here)
+                # Save registration to database
+                conn = sqlite3.connect(event_manager.db_path)
+                c = conn.cursor()
+                c.execute('''
+                    INSERT INTO registrations (event_id, name, phone, email, event_type, ticket_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (event_id, name, phone, email, event_type, ticket_id))
+                conn.commit()
+                conn.close()
+                
+                # Generate QR code
+                qr_filename = f"personal_qr/{ticket_id}.png"
+                os.makedirs("personal_qr", exist_ok=True)
+                generate_qr_code(ticket_id, qr_filename)
+                
                 st.success("✅ Registration Complete!")
                 st.balloons()
                 
-                # Generate QR code
-                qr_filename = f"tickets/{ticket_id}.png"
-                os.makedirs("tickets", exist_ok=True)
-                generate_qr_code(ticket_id, qr_filename)
-                
+                # Show ticket
                 col1, col2 = st.columns([1, 2])
                 with col1:
                     st.image(qr_filename, caption="Your Entry QR Code")
+                    # Download button for QR code
+                    with open(qr_filename, 'rb') as f:
+                        qr_data = f.read()
+                    st.download_button(
+                        label="📥 Download Your Ticket",
+                        data=qr_data,
+                        file_name=f"ticket_{name.replace(' ', '_')}.png",
+                        mime="image/png"
+                    )
                 with col2:
-                    st.subheader("🎫 Your Ticket")
+                    st.subheader("🎫 Your Digital Ticket")
                     st.write(f"**Name:** {name}")
                     st.write(f"**Phone:** {phone}")
                     st.write(f"**Email:** {email}")
                     st.write(f"**Package:** {event_type}")
+                    st.write(f"**Event:** {event_name}")
+                    st.write(f"**Date:** {event_date}")
                     st.write(f"**Ticket ID:** `{ticket_id}`")
-                    st.warning("**💡 Save this QR code for event entry!**")
+                    st.warning("**💡 Save this QR code! You'll need it for entry at the event.**")
+                    st.info("**A confirmation email has been sent to your inbox**")
             else:
-                st.error("Please fill in all required fields")
+                st.error("❌ Please fill in all required fields")
 
 def admin_login():
-    st.title("🔐 Event Manager Pro - Admin Portal")
+    """Admin authentication"""
+    st.title("🔐 Event Manager Pro")
     st.markdown("---")
     
     with st.form("admin_login"):
-        admin_id = st.text_input("Organization Name *")
-        admin_password = st.text_input("Admin Password *", type="password")
+        admin_id = st.text_input("Organization Name *", 
+                               placeholder="e.g., School_Event_Team, Company_Party_2024")
+        admin_password = st.text_input("Admin Password *", type="password",
+                                     placeholder="Enter your admin password")
         
         submitted = st.form_submit_button("Login to Admin Portal 🚀")
         
@@ -304,46 +277,81 @@ def admin_login():
                     st.success(f"✅ Welcome back, {admin_id}!")
                     st.rerun()
                 else:
-                    st.error("Invalid credentials")
+                    st.error("❌ Invalid credentials")
+            else:
+                st.error("❌ Please enter both organization name and password")
 
 def admin_dashboard():
+    """Main admin dashboard"""
     admin_id = st.session_state['admin_id']
     event_manager = EventManager(admin_id)
     
     st.sidebar.title(f"👤 {admin_id}")
+    st.sidebar.success("Admin Portal")
+    
     if st.sidebar.button("🚪 Logout"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
     
-    menu = st.sidebar.radio("Navigation", ["📊 Dashboard", "🎪 Create Event"])
+    # Navigation
+    menu = st.sidebar.radio("Navigation", [
+        "📊 Dashboard", 
+        "🎪 Create Event", 
+        "👥 View Registrations", 
+        "✅ Check-In"
+    ])
     
     if menu == "📊 Dashboard":
         show_dashboard(event_manager)
     elif menu == "🎪 Create Event":
         show_event_creation(event_manager)
+    elif menu == "👥 View Registrations":
+        view_registrations(event_manager)
+    elif menu == "✅ Check-In":
+        show_check_in(event_manager)
 
 def show_dashboard(event_manager):
     st.header("📊 Dashboard")
     
     events = event_manager.get_events()
-    st.metric("Active Events", len(events))
     
+    # Statistics
+    total_events = len(events)
+    total_registrations = 0
+    
+    conn = sqlite3.connect(event_manager.db_path)
+    for event_id, _, _, _, _ in events:
+        c = conn.cursor()
+        c.execute('SELECT COUNT(*) FROM registrations WHERE event_id = ?', (event_id,))
+        count = c.fetchone()[0]
+        total_registrations += count
+    conn.close()
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Active Events", total_events)
+    with col2:
+        st.metric("Total Registrations", total_registrations)
+    
+    # Events list
     if events:
         st.subheader("Your Events")
-        for event_id, event_name, event_date, event_description, google_form_url in events:
+        for event_id, event_name, event_date, event_description, form_url in events:
             with st.expander(f"🎪 {event_name} - {event_date}"):
                 col1, col2 = st.columns(2)
                 with col1:
                     st.write(f"**Event:** {event_name}")
                     st.write(f"**Date:** {event_date}")
-                    st.write(f"**Form URL:** [Open Registration]({google_form_url})")
+                    st.write(f"**Registration Form:** [Open Form]({form_url})")
                 with col2:
+                    # Show QR code
                     qr_path = f"public_qr/{event_manager.sanitize_id(event_manager.admin_id)}/{event_id}_public.png"
                     if os.path.exists(qr_path):
                         st.image(qr_path, width=150)
+                        st.info("Share this QR for registration")
     else:
-        st.info("No events yet. Create your first event!")
+        st.info("No events created yet. Create your first event!")
 
 def show_event_creation(event_manager):
     st.header("🎪 Create New Event")
@@ -351,17 +359,18 @@ def show_event_creation(event_manager):
     with st.form("create_event"):
         event_name = st.text_input("Event Name *", placeholder="Karaoke Night 2024")
         event_date = st.date_input("Event Date *")
-        event_description = st.text_area("Event Description", placeholder="Describe your event...")
+        event_description = st.text_area("Event Description (Optional)", 
+                                       placeholder="Describe your event for better AI-generated content...")
         
-        submitted = st.form_submit_button("🎫 Generate Event & Registration Form")
+        submitted = st.form_submit_button("🤖 Generate Event & Registration Form")
     
     if submitted and event_name:
-        with st.spinner("🤖 AI is creating your professional registration form..."):
-            event_id, form_url = event_manager.create_google_form_automatically(
+        with st.spinner("AI is creating your professional registration form..."):
+            event_id, form_url, form_content = event_manager.create_event_with_form(
                 event_name, str(event_date), event_description
             )
             
-            # Generate QR code
+            # Generate QR code for the form
             qr_filename = f"public_qr/{event_manager.sanitize_id(event_manager.admin_id)}/{event_id}_public.png"
             os.makedirs(f"public_qr/{event_manager.sanitize_id(event_manager.admin_id)}", exist_ok=True)
             generate_qr_code(form_url, qr_filename)
@@ -372,35 +381,127 @@ def show_event_creation(event_manager):
             with col1:
                 st.image(qr_filename, caption="Registration QR Code")
                 with open(qr_filename, 'rb') as f:
-                    st.download_button("📥 Download QR", f.read(), f"qr_{event_name}.png", "image/png")
+                    st.download_button(
+                        "📥 Download QR Code",
+                        f.read(),
+                        f"qr_{event_name.replace(' ', '_')}.png",
+                        "image/png"
+                    )
             
             with col2:
-                st.subheader("Event Ready!")
+                st.subheader("Event Details")
                 st.write(f"**Event:** {event_name}")
                 st.write(f"**Date:** {event_date}")
+                if event_description:
+                    st.write(f"**Description:** {event_description}")
                 st.write(f"**Registration Form:** [Open Form]({form_url})")
+                
                 st.info("""
                 **Next Steps:**
-                1. Share the QR code with guests
-                2. Guests scan → Register instantly
-                3. No login required for guests
-                4. Manage check-ins from dashboard
+                1. Download and share the QR code
+                2. Guests scan → Register instantly (NO LOGIN)
+                3. Manage registrations from dashboard
+                4. Check-in guests at the event
                 """)
 
+def view_registrations(event_manager):
+    st.header("👥 Event Registrations")
+    
+    events = event_manager.get_events()
+    if not events:
+        st.info("No events created yet.")
+        return
+    
+    event_options = {f"{name} - {date}": id for id, name, date, _, _ in events}
+    selected_event = st.selectbox("Select Event", list(event_options.keys()))
+    event_id = event_options[selected_event]
+    
+    conn = sqlite3.connect(event_manager.db_path)
+    df = pd.read_sql_query('''
+        SELECT name, phone, email, event_type, ticket_id, checked_in, registered_at 
+        FROM registrations 
+        WHERE event_id = ?
+        ORDER BY registered_at DESC
+    ''', conn, params=(event_id,))
+    conn.close()
+    
+    if not df.empty:
+        st.metric("Total Registrations", len(df))
+        st.metric("Checked In", len(df[df['checked_in'] == 1]))
+        st.dataframe(df)
+        
+        # Export data
+        csv = df.to_csv(index=False)
+        st.download_button(
+            "📥 Export as CSV",
+            csv,
+            f"registrations_{event_id}.csv",
+            "text/csv"
+        )
+    else:
+        st.info("No registrations for this event yet.")
+
+def show_check_in(event_manager):
+    st.header("✅ Guest Check-In")
+    
+    events = event_manager.get_events()
+    if not events:
+        st.info("No events created yet.")
+        return
+    
+    event_options = {f"{name} - {date}": id for id, name, date, _, _ in events}
+    selected_event = st.selectbox("Select Event", list(event_options.keys()))
+    event_id = event_options[selected_event]
+    
+    st.subheader("Check In Guest")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Manual Check-In**")
+        ticket_id = st.text_input("Enter Ticket ID:", key="manual_checkin")
+        if st.button("Check In Guest", key="manual_btn"):
+            if ticket_id:
+                check_in_guest(event_manager, ticket_id, event_id)
+            else:
+                st.error("Please enter a Ticket ID")
+    
+    with col2:
+        st.write("**QR Code Check-In**")
+        st.info("Point camera at guest's QR code")
+        uploaded_file = st.file_uploader("Or upload QR image", type=['png', 'jpg', 'jpeg'])
+        if uploaded_file:
+            st.warning("QR scanning will be implemented in next version")
+
+def check_in_guest(event_manager, ticket_id, event_id):
+    conn = sqlite3.connect(event_manager.db_path)
+    c = conn.cursor()
+    
+    c.execute('SELECT * FROM registrations WHERE ticket_id = ? AND event_id = ?', (ticket_id, event_id))
+    guest = c.fetchone()
+    
+    if guest:
+        if guest[8] == 1:  # Already checked in
+            st.warning(f"ℹ️ {guest[2]} is already checked in!")
+        else:
+            c.execute('UPDATE registrations SET checked_in = 1 WHERE ticket_id = ?', (ticket_id,))
+            conn.commit()
+            st.success(f"✅ {guest[2]} checked in successfully!")
+    else:
+        st.error("❌ Ticket not found for this event.")
+    
+    conn.close()
+
 def main():
+    # Page routing
     query_params = st.query_params
     page = query_params.get("page", [""])[0]
     
-    if page == "form":
-        # PUBLIC REGISTRATION FORM - NO AUTH REQUIRED
-        event_id = query_params.get("event", [""])[0]
-        admin_id = query_params.get("admin", [""])[0]
-        if event_id and admin_id:
-            show_custom_form(event_id, admin_id)
-        else:
-            st.error("Invalid registration link")
+    if page == "register":
+        # PUBLIC FACING - NO AUTHENTICATION
+        public_registration_form()
     else:
-        # ADMIN INTERFACE
+        # ADMIN FACING - REQUIRES AUTHENTICATION
         if 'authenticated' not in st.session_state:
             st.session_state['authenticated'] = False
         
