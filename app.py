@@ -38,6 +38,12 @@ class EventManager:
     def init_db(self):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
+        
+        # Drop and recreate tables to ensure schema consistency
+        c.execute('DROP TABLE IF EXISTS events')
+        c.execute('DROP TABLE IF EXISTS registrations')
+        
+        # Events table with correct schema
         c.execute('''
             CREATE TABLE IF NOT EXISTS events
             (event_id TEXT PRIMARY KEY,
@@ -47,7 +53,8 @@ class EventManager:
              form_url TEXT,
              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
         ''')
-        # Registrations table for storing form submissions
+        
+        # Registrations table
         c.execute('''
             CREATE TABLE IF NOT EXISTS registrations
             (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -256,30 +263,65 @@ def public_registration_form():
             else:
                 st.error("❌ Please fill in all required fields")
 
-def admin_login():
-    """Admin authentication"""
+def admin_auth():
+    """Admin authentication with both login and registration"""
     st.title("🔐 Event Manager Pro")
     st.markdown("---")
     
-    with st.form("admin_login"):
-        admin_id = st.text_input("Organization Name *", 
-                               placeholder="e.g., School_Event_Team, Company_Party_2024")
-        admin_password = st.text_input("Admin Password *", type="password",
-                                     placeholder="Enter your admin password")
-        
-        submitted = st.form_submit_button("Login to Admin Portal 🚀")
-        
-        if submitted:
-            if admin_id and admin_password:
-                if len(admin_password) >= 4:
-                    st.session_state['admin_id'] = admin_id
-                    st.session_state['authenticated'] = True
-                    st.success(f"✅ Welcome back, {admin_id}!")
-                    st.rerun()
+    # Tab selection for Login vs Register
+    tab1, tab2 = st.tabs(["🚀 Register New Organization", "🔐 Login Existing Organization"])
+    
+    with tab1:
+        st.subheader("Create New Organization Account")
+        with st.form("admin_register"):
+            new_admin_id = st.text_input("Organization Name *", 
+                                       placeholder="e.g., School_Event_Team, Company_Party_2024")
+            new_password = st.text_input("Create Admin Password *", type="password")
+            confirm_password = st.text_input("Confirm Password *", type="password")
+            admin_email = st.text_input("Contact Email (Optional)", 
+                                      placeholder="for notifications")
+            
+            registered = st.form_submit_button("Create Organization Account 📝")
+            
+            if registered:
+                if new_admin_id and new_password and confirm_password:
+                    if new_password == confirm_password:
+                        if len(new_password) >= 4:
+                            # Create admin space
+                            st.session_state['admin_id'] = new_admin_id
+                            st.session_state['authenticated'] = True
+                            st.success(f"✅ Organization '{new_admin_id}' created successfully!")
+                            st.info("You can now create and manage events!")
+                            st.rerun()
+                        else:
+                            st.error("Password must be at least 4 characters")
+                    else:
+                        st.error("Passwords do not match")
                 else:
-                    st.error("❌ Invalid credentials")
-            else:
-                st.error("❌ Please enter both organization name and password")
+                    st.error("Please fill in all required fields (*)")
+    
+    with tab2:
+        st.subheader("Login to Existing Account")
+        with st.form("admin_login"):
+            admin_id = st.text_input("Organization Name *", 
+                                   placeholder="Enter your organization name")
+            admin_password = st.text_input("Admin Password *", type="password",
+                                         placeholder="Enter your password")
+            
+            submitted = st.form_submit_button("Login to Admin Portal 🔐")
+            
+            if submitted:
+                if admin_id and admin_password:
+                    # Simple authentication (in production, use proper auth)
+                    if len(admin_password) >= 4:
+                        st.session_state['admin_id'] = admin_id
+                        st.session_state['authenticated'] = True
+                        st.success(f"✅ Welcome back, {admin_id}!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Invalid credentials")
+                else:
+                    st.error("❌ Please enter both organization name and password")
 
 def admin_dashboard():
     """Main admin dashboard"""
@@ -343,11 +385,19 @@ def show_dashboard(event_manager):
                 with col1:
                     st.write(f"**Event:** {event_name}")
                     st.write(f"**Date:** {event_date}")
+                    if event_description:
+                        st.write(f"**Description:** {event_description}")
                     st.write(f"**Registration Form:** [Open Form]({form_url})")
                 with col2:
                     # Show QR code
                     qr_path = f"public_qr/{event_manager.sanitize_id(event_manager.admin_id)}/{event_id}_public.png"
                     if os.path.exists(qr_path):
+                        st.image(qr_path, width=150)
+                        st.info("Share this QR for registration")
+                    else:
+                        # Generate QR code if it doesn't exist
+                        os.makedirs(f"public_qr/{event_manager.sanitize_id(event_manager.admin_id)}", exist_ok=True)
+                        generate_qr_code(form_url, qr_path)
                         st.image(qr_path, width=150)
                         st.info("Share this QR for registration")
     else:
@@ -506,7 +556,7 @@ def main():
             st.session_state['authenticated'] = False
         
         if not st.session_state['authenticated']:
-            admin_login()
+            admin_auth()  # Changed from admin_login to admin_auth
         else:
             admin_dashboard()
 
