@@ -22,73 +22,88 @@ class EventManager:
         self.init_db()
     
     def sanitize_id(self, admin_id):
-        """Sanitize admin ID for filename safety - CONSISTENT across all uses"""
+        """Sanitize admin ID for filename safety"""
         return "".join(c for c in admin_id if c.isalnum() or c in ('-', '_')).rstrip()
     
     def init_db(self):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         
+        # Drop tables if they exist to avoid schema conflicts
+        c.execute('DROP TABLE IF EXISTS events')
+        c.execute('DROP TABLE IF EXISTS registrations')
+        
+        # Create events table with correct schema
         c.execute('''
-            CREATE TABLE IF NOT EXISTS events
-            (event_id TEXT PRIMARY KEY,
-             event_name TEXT NOT NULL,
-             event_date TEXT,
-             event_description TEXT,
-             collect_name INTEGER DEFAULT 1,
-             collect_phone INTEGER DEFAULT 1,
-             collect_email INTEGER DEFAULT 1,
-             collect_company INTEGER DEFAULT 0,
-             collect_dietary INTEGER DEFAULT 0,
-             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+            CREATE TABLE events (
+                event_id TEXT PRIMARY KEY,
+                event_name TEXT NOT NULL,
+                event_date TEXT,
+                event_description TEXT,
+                collect_name INTEGER DEFAULT 1,
+                collect_phone INTEGER DEFAULT 1,
+                collect_email INTEGER DEFAULT 1,
+                collect_company INTEGER DEFAULT 0,
+                collect_dietary INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
         ''')
         
+        # Create registrations table
         c.execute('''
-            CREATE TABLE IF NOT EXISTS registrations
-            (id INTEGER PRIMARY KEY AUTOINCREMENT,
-             event_id TEXT NOT NULL,
-             name TEXT,
-             phone TEXT,
-             email TEXT,
-             company TEXT,
-             dietary TEXT,
-             event_type TEXT,
-             ticket_id TEXT UNIQUE NOT NULL,
-             registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-             checked_in INTEGER DEFAULT 0,
-             FOREIGN KEY (event_id) REFERENCES events (event_id))
+            CREATE TABLE registrations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL,
+                name TEXT,
+                phone TEXT,
+                email TEXT,
+                company TEXT,
+                dietary TEXT,
+                event_type TEXT,
+                ticket_id TEXT UNIQUE NOT NULL,
+                registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                checked_in INTEGER DEFAULT 0,
+                FOREIGN KEY (event_id) REFERENCES events (event_id)
+            )
         ''')
         conn.commit()
         conn.close()
     
     def create_event(self, event_name, event_date, event_description, form_fields):
+        """Create a new event in the database"""
         event_id = f"EVENT-{self.sanitize_id(event_name)}-{int(time.time())}"
         
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         
-        # FIXED: Correct number of parameters in INSERT statement
-        c.execute('''
-            INSERT INTO events (event_id, event_name, event_date, event_description, 
-                              collect_name, collect_phone, collect_email, collect_company, collect_dietary)
+        # FIXED: Clean SQL with proper parameter binding
+        sql = '''
+            INSERT INTO events 
+            (event_id, event_name, event_date, event_description, 
+             collect_name, collect_phone, collect_email, collect_company, collect_dietary) 
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
+        '''
+        
+        params = (
             event_id, 
             event_name, 
             event_date, 
-            event_description,
+            event_description or "",
             form_fields.get('name', 1), 
             form_fields.get('phone', 1), 
             form_fields.get('email', 1), 
             form_fields.get('company', 0),
             form_fields.get('dietary', 0)
-        ))
+        )
+        
+        c.execute(sql, params)
         conn.commit()
         conn.close()
         
         return event_id
     
     def get_events(self):
+        """Get all events for this admin"""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         c.execute('SELECT event_id, event_name, event_date, event_description FROM events ORDER BY created_at DESC')
@@ -97,6 +112,7 @@ class EventManager:
         return events
 
 def generate_qr_code(data, filename):
+    """Generate QR code image"""
     qr = qrcode.QRCode(
         version=1,
         error_correction=qrcode.constants.ERROR_CORRECT_L,
@@ -110,21 +126,16 @@ def generate_qr_code(data, filename):
     return filename
 
 def sanitize_admin_id(admin_id):
-    """Consistent sanitization function used everywhere"""
+    """Consistent sanitization function"""
     return "".join(c for c in admin_id if c.isalnum() or c in ('-', '_')).rstrip()
 
 def get_event_details(admin_id, event_id):
-    """Get event details with proper database path"""
+    """Get event details from database"""
     try:
         sanitized_admin_id = sanitize_admin_id(admin_id)
         db_path = f"databases/events_{sanitized_admin_id}.db"
         
-        # Debug info
-        st.sidebar.write(f"Looking for database: {db_path}")
-        st.sidebar.write(f"Database exists: {os.path.exists(db_path)}")
-        
         if not os.path.exists(db_path):
-            st.sidebar.error(f"Database not found: {db_path}")
             return None
         
         conn = sqlite3.connect(db_path)
@@ -137,14 +148,9 @@ def get_event_details(admin_id, event_id):
         event_data = c.fetchone()
         conn.close()
         
-        if event_data:
-            st.sidebar.success("✅ Event found in database!")
-        else:
-            st.sidebar.error("❌ Event ID not found in database")
-            
         return event_data
     except Exception as e:
-        st.sidebar.error(f"Database error: {str(e)}")
+        st.error(f"Database error: {str(e)}")
         return None
 
 # ===== GUEST REGISTRATION INTERFACE =====
@@ -154,35 +160,19 @@ def show_guest_registration():
     event_id = query_params.get("event", [""])[0]
     admin_id = query_params.get("admin", [""])[0]
     
-    # Debug information
-    st.sidebar.title("🔧 Debug Info")
-    st.sidebar.write(f"Event ID: {event_id}")
-    st.sidebar.write(f"Admin ID: {admin_id}")
-    
     if not event_id or not admin_id:
-        st.error("❌ Invalid registration link - missing parameters")
-        st.info("Please scan the QR code provided by the event organizer")
+        st.error("❌ Invalid registration link")
         return
     
-    # Get event details with proper database path
     event_data = get_event_details(admin_id, event_id)
     
     if not event_data:
-        st.error("❌ Event not found in database")
-        st.info("""
-        This could be because:
-        - The event was deleted
-        - The QR code is expired
-        - There's a database issue
-        
-        Please contact the event organizer.
-        """)
+        st.error("❌ Event not found")
         return
     
     (event_name, event_date, event_description, 
      collect_name, collect_phone, collect_email, collect_company, collect_dietary) = event_data
     
-    # Show event header
     st.title("🎟️ Event Registration")
     st.success(f"**{event_name}**")
     st.write(f"**Date:** {event_date}")
@@ -190,7 +180,6 @@ def show_guest_registration():
         st.write(f"**About:** {event_description}")
     st.markdown("---")
     
-    # Registration form
     with st.form("registration_form", clear_on_submit=True):
         st.subheader("Your Information")
         
@@ -217,7 +206,6 @@ def show_guest_registration():
         submitted = st.form_submit_button("Register Now 🎫")
         
         if submitted:
-            # Validate required fields
             required_fields = []
             if collect_name and not form_data.get('name'):
                 required_fields.append("Full Name")
@@ -231,16 +219,13 @@ def show_guest_registration():
             if required_fields:
                 st.error(f"❌ Please fill in: {', '.join(required_fields)}")
             else:
-                # Save registration to the correct database
                 try:
                     sanitized_admin_id = sanitize_admin_id(admin_id)
                     db_path = f"databases/events_{sanitized_admin_id}.db"
                     
-                    # Generate ticket ID
                     phone = form_data.get('phone', '')
                     ticket_id = f"TKT-{phone}-{int(time.time())}" if phone else f"TKT-{int(time.time())}"
                     
-                    # Save registration
                     conn = sqlite3.connect(db_path)
                     c = conn.cursor()
                     c.execute('''
@@ -259,14 +244,11 @@ def show_guest_registration():
                     conn.close()
                     
                     st.success("✅ Registration Complete!")
-                    st.balloons()
                     
-                    # Generate personal QR ticket
                     qr_filename = f"personal_qr/{ticket_id}.png"
                     os.makedirs("personal_qr", exist_ok=True)
                     generate_qr_code(ticket_id, qr_filename)
                     
-                    # Show ticket
                     col1, col2 = st.columns([1, 2])
                     with col1:
                         st.image(qr_filename, caption="Your Entry QR Code")
@@ -288,11 +270,10 @@ def show_guest_registration():
                         st.write(f"**Event:** {event_name}")
                         st.write(f"**Date:** {event_date}")
                         st.write(f"**Ticket ID:** `{ticket_id}`")
-                        st.warning("**💡 Save this QR code! You'll need it for entry.**")
+                        st.warning("**💡 Save this QR code for entry!**")
                         
                 except Exception as e:
                     st.error(f"❌ Registration failed: {str(e)}")
-                    st.info("Please try again or contact the event organizer.")
 
 # ===== ADMIN INTERFACE =====
 def admin_auth():
@@ -304,8 +285,7 @@ def admin_auth():
     with tab1:
         st.subheader("Create New Organization Account")
         with st.form("admin_register"):
-            new_admin_id = st.text_input("Organization Name *", 
-                                       placeholder="e.g., SchoolEventTeam, CompanyParty2024")
+            new_admin_id = st.text_input("Organization Name *", placeholder="SchoolEventTeam")
             new_password = st.text_input("Create Admin Password *", type="password")
             confirm_password = st.text_input("Confirm Password *", type="password")
             
@@ -317,14 +297,14 @@ def admin_auth():
                         if len(new_password) >= 4:
                             st.session_state['admin_id'] = new_admin_id
                             st.session_state['authenticated'] = True
-                            st.success(f"✅ Organization '{new_admin_id}' created successfully!")
+                            st.success(f"✅ Organization '{new_admin_id}' created!")
                             st.rerun()
                         else:
                             st.error("Password must be at least 4 characters")
                     else:
                         st.error("Passwords do not match")
                 else:
-                    st.error("Please fill in all required fields (*)")
+                    st.error("Please fill in all required fields")
     
     with tab2:
         st.subheader("Login to Existing Account")
@@ -343,8 +323,6 @@ def admin_auth():
                         st.rerun()
                     else:
                         st.error("❌ Invalid credentials")
-                else:
-                    st.error("❌ Please enter both organization name and password")
 
 def admin_dashboard():
     admin_id = st.session_state['admin_id']
@@ -407,18 +385,16 @@ def show_dashboard(event_manager, admin_id):
                     if event_description:
                         st.write(f"**Description:** {event_description}")
                     
-                    # Show registration URL
                     registration_url = f"https://event-manager-app-aicon.streamlit.app/?event={event_id}&admin={admin_id}"
                     st.write("**Registration URL:**")
                     st.code(registration_url)
                     
                 with col2:
-                    # Generate QR code
                     qr_path = f"public_qr/{event_manager.sanitized_id}/{event_id}_public.png"
                     os.makedirs(f"public_qr/{event_manager.sanitized_id}", exist_ok=True)
                     generate_qr_code(registration_url, qr_path)
                     st.image(qr_path, width=150)
-                    st.info("**Share this QR code with guests**")
+                    st.info("**Share this QR code**")
                     
                     with open(qr_path, 'rb') as f:
                         st.download_button(
@@ -440,7 +416,6 @@ def show_event_creation(event_manager, admin_id):
         event_description = st.text_area("Event Description (Optional)")
         
         st.subheader("📝 Information to Collect from Guests")
-        st.info("Select which information you want to collect from guests during registration")
         
         col1, col2 = st.columns(2)
         with col1:
@@ -466,19 +441,12 @@ def show_event_creation(event_manager, admin_id):
             event_name, str(event_date), event_description, form_fields
         )
         
-        # Generate registration URL and QR code
         registration_url = f"https://event-manager-app-aicon.streamlit.app/?event={event_id}&admin={admin_id}"
         qr_filename = f"public_qr/{event_manager.sanitized_id}/{event_id}_public.png"
         os.makedirs(f"public_qr/{event_manager.sanitized_id}", exist_ok=True)
         generate_qr_code(registration_url, qr_filename)
         
         st.success("🎉 Event Created Successfully!")
-        
-        # Debug info
-        st.sidebar.success("Event created in database!")
-        st.sidebar.write(f"Event ID: {event_id}")
-        st.sidebar.write(f"Admin ID: {admin_id}")
-        st.sidebar.write(f"Database: {event_manager.db_path}")
         
         col1, col2 = st.columns([1, 2])
         with col1:
@@ -501,7 +469,7 @@ def show_event_creation(event_manager, admin_id):
             st.info("""
             **Next Steps:**
             1. Share the QR code with guests
-            2. Guests scan → Register instantly (NO LOGIN)
+            2. Guests scan → Register instantly
             3. Manage registrations from dashboard
             4. Check-in guests at the event
             """)
@@ -582,7 +550,7 @@ def check_in_guest(event_manager, ticket_id, event_id):
     guest = c.fetchone()
     
     if guest:
-        if guest[9] == 1:  # Already checked in
+        if guest[9] == 1:
             st.warning(f"ℹ️ {guest[1] or 'Guest'} is already checked in!")
         else:
             c.execute('UPDATE registrations SET checked_in = 1 WHERE ticket_id = ?', (ticket_id,))
@@ -595,16 +563,13 @@ def check_in_guest(event_manager, ticket_id, event_id):
     conn.close()
 
 def main():
-    # Smart routing based on URL parameters
     query_params = st.query_params
     event_id = query_params.get("event", [""])[0]
     admin_id = query_params.get("admin", [""])[0]
     
-    # If event and admin parameters exist, show guest registration
     if event_id and admin_id:
         show_guest_registration()
     else:
-        # Otherwise show admin interface
         if 'authenticated' not in st.session_state:
             st.session_state['authenticated'] = False
         
