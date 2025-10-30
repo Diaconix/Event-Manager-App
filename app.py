@@ -5,6 +5,7 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta
 import time
+import urllib.parse
 
 # Set up the page
 st.set_page_config(
@@ -143,12 +144,15 @@ def generate_qr_code(data, filename):
 def show_guest_registration():
     """Public guest registration - NO AUTH REQUIRED"""
     query_params = st.query_params
-    event_id = query_params.get("event", [""])[0]
-    admin_id = query_params.get("admin", [""])[0]
+    
+    # FIX: Get ALL values for each parameter, not just first character
+    event_id = query_params.get("event", [""])[0] if query_params.get("event") else ""
+    admin_id = query_params.get("admin", [""])[0] if query_params.get("admin") else ""
     
     st.sidebar.title("🔍 Debug Info")
-    st.sidebar.write(f"Event ID: {event_id}")
-    st.sidebar.write(f"Admin ID: {admin_id}")
+    st.sidebar.write(f"Full Event ID: {event_id}")
+    st.sidebar.write(f"Full Admin ID: {admin_id}")
+    st.sidebar.write(f"All query params: {dict(query_params)}")
     
     if not event_id or not admin_id:
         st.error("❌ Invalid registration link - missing parameters")
@@ -159,15 +163,27 @@ def show_guest_registration():
     event_manager = EventManager()
     event_data = event_manager.get_event_details(event_id, admin_id)
     
-    st.sidebar.write(f"Event found: {event_data is not None}")
+    st.sidebar.write(f"Event found in DB: {event_data is not None}")
     
     if not event_data:
         st.error("❌ Event not found in database")
+        
+        # Show what events ARE in the database for debugging
+        conn = sqlite3.connect(DATABASE_PATH)
+        c = conn.cursor()
+        c.execute("SELECT event_id, admin_id, event_name FROM events")
+        all_events = c.fetchall()
+        conn.close()
+        
+        st.sidebar.write("Events in database:")
+        for evt in all_events:
+            st.sidebar.write(f"- {evt}")
+        
         st.info("""
         Possible reasons:
+        - The QR code was generated incorrectly
         - The event was deleted
-        - The QR code is incorrect
-        - The event organizer changed their settings
+        - Database connection issue
         
         Please contact the event organizer for assistance.
         """)
@@ -393,7 +409,8 @@ def show_dashboard(event_manager, admin_id):
                     if event_description:
                         st.write(f"**Description:** {event_description}")
                     
-                    registration_url = f"https://event-manager-app-aicon.streamlit.app/?event={event_id}&admin={admin_id}"
+                    # FIX: Use proper URL encoding for parameters
+                    registration_url = f"https://event-manager-app-aicon.streamlit.app/?event={urllib.parse.quote(event_id)}&admin={urllib.parse.quote(admin_id)}"
                     st.write("**Registration URL:**")
                     st.code(registration_url)
                     
@@ -449,7 +466,8 @@ def show_event_creation(event_manager, admin_id):
             admin_id, event_name, str(event_date), event_description, form_fields
         )
         
-        registration_url = f"https://event-manager-app-aicon.streamlit.app/?event={event_id}&admin={admin_id}"
+        # FIX: Use URL encoding for parameters
+        registration_url = f"https://event-manager-app-aicon.streamlit.app/?event={urllib.parse.quote(event_id)}&admin={urllib.parse.quote(admin_id)}"
         qr_filename = f"public_qr/{admin_id}/{event_id}_public.png"
         os.makedirs(f"public_qr/{admin_id}", exist_ok=True)
         generate_qr_code(registration_url, qr_filename)
@@ -460,6 +478,7 @@ def show_event_creation(event_manager, admin_id):
         st.sidebar.success("✅ Event saved to database!")
         st.sidebar.write(f"Event ID: {event_id}")
         st.sidebar.write(f"Admin ID: {admin_id}")
+        st.sidebar.write(f"Registration URL: {registration_url}")
         
         col1, col2 = st.columns([1, 2])
         with col1:
@@ -578,8 +597,10 @@ def check_in_guest(event_manager, ticket_id, event_id, admin_id):
 
 def main():
     query_params = st.query_params
-    event_id = query_params.get("event", [""])[0]
-    admin_id = query_params.get("admin", [""])[0]
+    
+    # FIX: Proper parameter handling
+    event_id = query_params.get("event", [""])[0] if query_params.get("event") else ""
+    admin_id = query_params.get("admin", [""])[0] if query_params.get("admin") else ""
     
     if event_id and admin_id:
         show_guest_registration()
