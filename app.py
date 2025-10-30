@@ -16,11 +16,13 @@ st.set_page_config(
 class EventManager:
     def __init__(self, admin_id):
         self.admin_id = admin_id
-        self.db_path = f"databases/events_{self.sanitize_id(admin_id)}.db"
+        self.sanitized_id = self.sanitize_id(admin_id)
+        self.db_path = f"databases/events_{self.sanitized_id}.db"
         os.makedirs("databases", exist_ok=True)
         self.init_db()
     
     def sanitize_id(self, admin_id):
+        """Sanitize admin ID for filename safety - CONSISTENT across all uses"""
         return "".join(c for c in admin_id if c.isalnum() or c in ('-', '_')).rstrip()
     
     def init_db(self):
@@ -98,6 +100,44 @@ def generate_qr_code(data, filename):
     img.save(filename)
     return filename
 
+def sanitize_admin_id(admin_id):
+    """Consistent sanitization function used everywhere"""
+    return "".join(c for c in admin_id if c.isalnum() or c in ('-', '_')).rstrip()
+
+def get_event_details(admin_id, event_id):
+    """Get event details with proper database path"""
+    try:
+        sanitized_admin_id = sanitize_admin_id(admin_id)
+        db_path = f"databases/events_{sanitized_admin_id}.db"
+        
+        # Debug info
+        st.sidebar.write(f"Looking for database: {db_path}")
+        st.sidebar.write(f"Database exists: {os.path.exists(db_path)}")
+        
+        if not os.path.exists(db_path):
+            st.sidebar.error(f"Database not found: {db_path}")
+            return None
+        
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        c.execute('''
+            SELECT event_name, event_date, event_description, 
+                   collect_name, collect_phone, collect_email, collect_company, collect_dietary
+            FROM events WHERE event_id = ?
+        ''', (event_id,))
+        event_data = c.fetchone()
+        conn.close()
+        
+        if event_data:
+            st.sidebar.success("✅ Event found in database!")
+        else:
+            st.sidebar.error("❌ Event ID not found in database")
+            
+        return event_data
+    except Exception as e:
+        st.sidebar.error(f"Database error: {str(e)}")
+        return None
+
 # ===== GUEST REGISTRATION INTERFACE =====
 def show_guest_registration():
     """Public guest registration - NO AUTH REQUIRED"""
@@ -105,25 +145,29 @@ def show_guest_registration():
     event_id = query_params.get("event", [""])[0]
     admin_id = query_params.get("admin", [""])[0]
     
+    # Debug information
+    st.sidebar.title("🔧 Debug Info")
+    st.sidebar.write(f"Event ID: {event_id}")
+    st.sidebar.write(f"Admin ID: {admin_id}")
+    
     if not event_id or not admin_id:
-        st.error("❌ Invalid registration link")
+        st.error("❌ Invalid registration link - missing parameters")
         st.info("Please scan the QR code provided by the event organizer")
         return
     
-    # Get event details
-    event_manager = EventManager(admin_id)
-    conn = sqlite3.connect(event_manager.db_path)
-    c = conn.cursor()
-    c.execute('''
-        SELECT event_name, event_date, event_description, 
-               collect_name, collect_phone, collect_email, collect_company, collect_dietary
-        FROM events WHERE event_id = ?
-    ''', (event_id,))
-    event_data = c.fetchone()
-    conn.close()
+    # Get event details with proper database path
+    event_data = get_event_details(admin_id, event_id)
     
     if not event_data:
-        st.error("❌ Event not found")
+        st.error("❌ Event not found in database")
+        st.info("""
+        This could be because:
+        - The event was deleted
+        - The QR code is expired
+        - There's a database issue
+        
+        Please contact the event organizer.
+        """)
         return
     
     (event_name, event_date, event_description, 
@@ -178,59 +222,68 @@ def show_guest_registration():
             if required_fields:
                 st.error(f"❌ Please fill in: {', '.join(required_fields)}")
             else:
-                # Generate ticket ID
-                phone = form_data.get('phone', '')
-                ticket_id = f"TKT-{phone}-{int(time.time())}" if phone else f"TKT-{int(time.time())}"
-                
-                # Save registration
-                conn = sqlite3.connect(event_manager.db_path)
-                c = conn.cursor()
-                c.execute('''
-                    INSERT INTO registrations 
-                    (event_id, name, phone, email, company, dietary, event_type, ticket_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (event_id, 
-                      form_data.get('name'), 
-                      form_data.get('phone'),
-                      form_data.get('email'),
-                      form_data.get('company'),
-                      form_data.get('dietary'),
-                      form_data.get('event_type'),
-                      ticket_id))
-                conn.commit()
-                conn.close()
-                
-                st.success("✅ Registration Complete!")
-                st.balloons()
-                
-                # Generate personal QR ticket
-                qr_filename = f"personal_qr/{ticket_id}.png"
-                os.makedirs("personal_qr", exist_ok=True)
-                generate_qr_code(ticket_id, qr_filename)
-                
-                # Show ticket
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    st.image(qr_filename, caption="Your Entry QR Code")
-                    with open(qr_filename, 'rb') as f:
-                        st.download_button(
-                            "📥 Download Your Ticket",
-                            f.read(),
-                            f"ticket_{ticket_id}.png",
-                            "image/png"
-                        )
-                with col2:
-                    st.subheader("🎫 Your Digital Ticket")
-                    if form_data.get('name'):
-                        st.write(f"**Name:** {form_data['name']}")
-                    if form_data.get('phone'):
-                        st.write(f"**Phone:** {form_data['phone']}")
-                    if form_data.get('email'):
-                        st.write(f"**Email:** {form_data['email']}")
-                    st.write(f"**Event:** {event_name}")
-                    st.write(f"**Date:** {event_date}")
-                    st.write(f"**Ticket ID:** `{ticket_id}`")
-                    st.warning("**💡 Save this QR code! You'll need it for entry.**")
+                # Save registration to the correct database
+                try:
+                    sanitized_admin_id = sanitize_admin_id(admin_id)
+                    db_path = f"databases/events_{sanitized_admin_id}.db"
+                    
+                    # Generate ticket ID
+                    phone = form_data.get('phone', '')
+                    ticket_id = f"TKT-{phone}-{int(time.time())}" if phone else f"TKT-{int(time.time())}"
+                    
+                    # Save registration
+                    conn = sqlite3.connect(db_path)
+                    c = conn.cursor()
+                    c.execute('''
+                        INSERT INTO registrations 
+                        (event_id, name, phone, email, company, dietary, event_type, ticket_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (event_id, 
+                          form_data.get('name'), 
+                          form_data.get('phone'),
+                          form_data.get('email'),
+                          form_data.get('company'),
+                          form_data.get('dietary'),
+                          form_data.get('event_type'),
+                          ticket_id))
+                    conn.commit()
+                    conn.close()
+                    
+                    st.success("✅ Registration Complete!")
+                    st.balloons()
+                    
+                    # Generate personal QR ticket
+                    qr_filename = f"personal_qr/{ticket_id}.png"
+                    os.makedirs("personal_qr", exist_ok=True)
+                    generate_qr_code(ticket_id, qr_filename)
+                    
+                    # Show ticket
+                    col1, col2 = st.columns([1, 2])
+                    with col1:
+                        st.image(qr_filename, caption="Your Entry QR Code")
+                        with open(qr_filename, 'rb') as f:
+                            st.download_button(
+                                "📥 Download Your Ticket",
+                                f.read(),
+                                f"ticket_{ticket_id}.png",
+                                "image/png"
+                            )
+                    with col2:
+                        st.subheader("🎫 Your Digital Ticket")
+                        if form_data.get('name'):
+                            st.write(f"**Name:** {form_data['name']}")
+                        if form_data.get('phone'):
+                            st.write(f"**Phone:** {form_data['phone']}")
+                        if form_data.get('email'):
+                            st.write(f"**Email:** {form_data['email']}")
+                        st.write(f"**Event:** {event_name}")
+                        st.write(f"**Date:** {event_date}")
+                        st.write(f"**Ticket ID:** `{ticket_id}`")
+                        st.warning("**💡 Save this QR code! You'll need it for entry.**")
+                        
+                except Exception as e:
+                    st.error(f"❌ Registration failed: {str(e)}")
+                    st.info("Please try again or contact the event organizer.")
 
 # ===== ADMIN INTERFACE =====
 def admin_auth():
@@ -242,7 +295,8 @@ def admin_auth():
     with tab1:
         st.subheader("Create New Organization Account")
         with st.form("admin_register"):
-            new_admin_id = st.text_input("Organization Name *")
+            new_admin_id = st.text_input("Organization Name *", 
+                                       placeholder="e.g., SchoolEventTeam, CompanyParty2024")
             new_password = st.text_input("Create Admin Password *", type="password")
             confirm_password = st.text_input("Confirm Password *", type="password")
             
@@ -303,7 +357,7 @@ def admin_dashboard():
     ])
     
     if menu == "📊 Dashboard":
-        show_dashboard(event_manager)
+        show_dashboard(event_manager, admin_id)
     elif menu == "🎪 Create Event":
         show_event_creation(event_manager, admin_id)
     elif menu == "👥 View Registrations":
@@ -311,7 +365,7 @@ def admin_dashboard():
     elif menu == "✅ Check-In":
         show_check_in(event_manager)
 
-def show_dashboard(event_manager):
+def show_dashboard(event_manager, admin_id):
     st.header("📊 Dashboard")
     
     events = event_manager.get_events()
@@ -343,16 +397,27 @@ def show_dashboard(event_manager):
                     st.write(f"**Date:** {event_date}")
                     if event_description:
                         st.write(f"**Description:** {event_description}")
+                    
+                    # Show registration URL
+                    registration_url = f"https://event-manager-app-aicon.streamlit.app/?event={event_id}&admin={admin_id}"
+                    st.write("**Registration URL:**")
+                    st.code(registration_url)
+                    
                 with col2:
-                    # Generate registration URL for this event
-                    registration_url = f"https://event-manager-app-aicon.streamlit.app/?event={event_id}&admin={event_manager.admin_id}"
-                    qr_path = f"public_qr/{event_manager.sanitize_id(event_manager.admin_id)}/{event_id}_public.png"
-                    os.makedirs(f"public_qr/{event_manager.sanitize_id(event_manager.admin_id)}", exist_ok=True)
+                    # Generate QR code
+                    qr_path = f"public_qr/{event_manager.sanitized_id}/{event_id}_public.png"
+                    os.makedirs(f"public_qr/{event_manager.sanitized_id}", exist_ok=True)
                     generate_qr_code(registration_url, qr_path)
                     st.image(qr_path, width=150)
                     st.info("**Share this QR code with guests**")
-                    st.write(f"**Registration URL:**")
-                    st.code(registration_url)
+                    
+                    with open(qr_path, 'rb') as f:
+                        st.download_button(
+                            "📥 Download QR Code",
+                            f.read(),
+                            f"qr_{event_name.replace(' ', '_')}.png",
+                            "image/png"
+                        )
     else:
         st.info("No events created yet. Create your first event!")
 
@@ -394,11 +459,17 @@ def show_event_creation(event_manager, admin_id):
         
         # Generate registration URL and QR code
         registration_url = f"https://event-manager-app-aicon.streamlit.app/?event={event_id}&admin={admin_id}"
-        qr_filename = f"public_qr/{event_manager.sanitize_id(event_manager.admin_id)}/{event_id}_public.png"
-        os.makedirs(f"public_qr/{event_manager.sanitize_id(event_manager.admin_id)}", exist_ok=True)
+        qr_filename = f"public_qr/{event_manager.sanitized_id}/{event_id}_public.png"
+        os.makedirs(f"public_qr/{event_manager.sanitized_id}", exist_ok=True)
         generate_qr_code(registration_url, qr_filename)
         
         st.success("🎉 Event Created Successfully!")
+        
+        # Debug info
+        st.sidebar.success("Event created in database!")
+        st.sidebar.write(f"Event ID: {event_id}")
+        st.sidebar.write(f"Admin ID: {admin_id}")
+        st.sidebar.write(f"Database: {event_manager.db_path}")
         
         col1, col2 = st.columns([1, 2])
         with col1:
@@ -415,7 +486,7 @@ def show_event_creation(event_manager, admin_id):
             st.subheader("Event Ready!")
             st.write(f"**Event:** {event_name}")
             st.write(f"**Date:** {event_date}")
-            st.write(f"**Guest Registration URL:**")
+            st.write(f"**Registration URL:**")
             st.code(registration_url)
             
             st.info("""
