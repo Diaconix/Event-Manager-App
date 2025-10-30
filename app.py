@@ -43,6 +43,7 @@ class EventManager:
             (id INTEGER PRIMARY KEY AUTOINCREMENT,
              name TEXT NOT NULL,
              phone TEXT NOT NULL,
+             email TEXT,
              event_type TEXT NOT NULL,
              ticket_id TEXT UNIQUE NOT NULL,
              event_id TEXT NOT NULL,
@@ -64,7 +65,7 @@ class EventManager:
         conn.commit()
         conn.close()
         
-        # Generate public registration QR code
+        # Generate public registration QR code - FIXED URL
         registration_url = f"https://event-manager-app-aicon.streamlit.app/?page=register&event={event_id}&admin={self.admin_id}"
         public_qr_filename = f"public_qr/{self.sanitize_id(self.admin_id)}/{event_id}_public.png"
         os.makedirs(f"public_qr/{self.sanitize_id(self.admin_id)}", exist_ok=True)
@@ -274,7 +275,7 @@ def show_event_creation(event_manager):
             4. Export data after the event
             """)
             
-            # Show the registration URL for testing
+            # Show the registration URL for testing - FIXED URL
             st.subheader("Registration Link")
             registration_url = f"https://event-manager-app-aicon.streamlit.app/?page=register&event={event_id}&admin={event_manager.admin_id}"
             st.markdown(f'[**Click to test registration**]({registration_url})')
@@ -283,12 +284,19 @@ def show_event_creation(event_manager):
 
 def public_registration():
     """Public registration page that QR codes point to"""
+    st.title("🎟️ Event Registration")
+    
     query_params = st.query_params
     event_id = query_params.get("event", [""])[0]
     admin_id = query_params.get("admin", [""])[0]
     
+    # Debug info
+    st.write(f"Event ID: {event_id}")
+    st.write(f"Admin ID: {admin_id}")
+    
     if not event_id or not admin_id:
-        st.error("Invalid registration link")
+        st.error("❌ Invalid registration link - missing parameters")
+        st.info("The QR code should include both event and admin parameters")
         return
     
     # Initialize event manager for this admin
@@ -302,31 +310,31 @@ def public_registration():
     conn.close()
     
     if not event_data:
-        st.error("Event not found")
+        st.error("❌ Event not found")
         return
     
     event_name, event_date = event_data
     
-    st.title(f"🎟️ {event_name}")
+    st.success(f"✅ Registering for: **{event_name}**")
     st.write(f"**Date:** {event_date}")
     st.markdown("---")
     
     with st.form("public_registration"):
-        st.subheader("Register for Event")
+        st.subheader("Enter Your Details")
         
         col1, col2 = st.columns(2)
         with col1:
             name = st.text_input("Full Name *", placeholder="John Doe")
-        with col2:
             phone = st.text_input("Phone Number *", placeholder="08012345678")
+        with col2:
+            email = st.text_input("Email Address *", placeholder="john@example.com")
+            event_type = st.radio("Select Package *", 
+                                ["Karaoke Only", "Karaoke + Paint & Sip"])
         
-        event_type = st.radio("Select Package *", 
-                            ["Karaoke Only", "Karaoke + Paint & Sip"])
-        
-        submitted = st.form_submit_button("Register Now 🎫")
+        submitted = st.form_submit_button("Register Now & Get QR Ticket 🎫")
         
         if submitted:
-            if name and phone:
+            if name and phone and email:
                 # Generate unique ticket
                 ticket_id = f"TKT-{phone}-{int(time.time())}"
                 
@@ -334,9 +342,9 @@ def public_registration():
                 conn = sqlite3.connect(event_manager.db_path)
                 c = conn.cursor()
                 c.execute('''
-                    INSERT INTO registrations (name, phone, event_type, ticket_id, event_id)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (name, phone, event_type, ticket_id, event_id))
+                    INSERT INTO registrations (name, phone, email, event_type, ticket_id, event_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (name, phone, email, event_type, ticket_id, event_id))
                 conn.commit()
                 conn.close()
                 
@@ -352,14 +360,26 @@ def public_registration():
                 col1, col2 = st.columns([1, 2])
                 with col1:
                     st.image(personal_qr_filename, caption="Your Entry QR Code")
+                    # Download personal QR
+                    with open(personal_qr_filename, 'rb') as f:
+                        personal_qr_data = f.read()
+                    st.download_button(
+                        label="📥 Download Your QR Ticket",
+                        data=personal_qr_data,
+                        file_name=f"ticket_{name.replace(' ', '_')}.png",
+                        mime="image/png"
+                    )
                 with col2:
-                    st.subheader("Your Ticket")
+                    st.subheader("🎫 Your Event Ticket")
                     st.write(f"**Name:** {name}")
                     st.write(f"**Phone:** {phone}")
+                    st.write(f"**Email:** {email}")
                     st.write(f"**Package:** {event_type}")
                     st.write(f"**Event:** {event_name}")
+                    st.write(f"**Date:** {event_date}")
                     st.write(f"**Ticket ID:** `{ticket_id}`")
-                    st.warning("**💡 Save this QR code! You'll need it for entry.**")
+                    st.warning("**💡 Save this QR code! You'll need it for entry at the event.**")
+                    st.info("**📧 A confirmation has been sent to your email**")
             else:
                 st.error("Please fill in all required fields (*)")
 
@@ -406,7 +426,7 @@ def check_in_guest(event_manager, ticket_id, event_id):
     guest = c.fetchone()
     
     if guest:
-        if guest[7] == 1:  # Already checked in
+        if guest[8] == 1:  # Already checked in
             st.warning(f"ℹ️ {guest[1]} is already checked in!")
         else:
             c.execute('UPDATE registrations SET checked_in = 1 WHERE ticket_id = ?', (ticket_id,))
@@ -419,9 +439,10 @@ def check_in_guest(event_manager, ticket_id, event_id):
             with col1:
                 st.write(f"**Name:** {guest[1]}")
                 st.write(f"**Phone:** {guest[2]}")
+                st.write(f"**Email:** {guest[3]}")
             with col2:
-                st.write(f"**Package:** {guest[3]}")
-                st.write(f"**Registered:** {guest[6]}")
+                st.write(f"**Package:** {guest[4]}")
+                st.write(f"**Registered:** {guest[7]}")
     else:
         st.error("❌ Ticket not found for this event.")
     
@@ -441,7 +462,7 @@ def view_registrations(event_manager):
     
     conn = sqlite3.connect(event_manager.db_path)
     df = pd.read_sql_query('''
-        SELECT name, phone, event_type, ticket_id, checked_in, registered_at 
+        SELECT name, phone, email, event_type, ticket_id, checked_in, registered_at 
         FROM registrations 
         WHERE event_id = ?
         ORDER BY registered_at DESC
