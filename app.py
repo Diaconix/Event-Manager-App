@@ -65,7 +65,7 @@ class EventManager:
         conn.close()
         
         # Generate public registration QR code
-        registration_url = f"http://localhost:8501/?page=register&event={event_id}&admin={self.admin_id}"
+        registration_url = f"https://event-manager-app.streamlit.app/?page=register&event={event_id}&admin={self.admin_id}"
         public_qr_filename = f"public_qr/{self.sanitize_id(self.admin_id)}/{event_id}_public.png"
         os.makedirs(f"public_qr/{self.sanitize_id(self.admin_id)}", exist_ok=True)
         generate_qr_code(registration_url, public_qr_filename)
@@ -249,7 +249,7 @@ def show_event_creation(event_manager):
             
             # Show the registration URL for testing
             st.subheader("Registration Link (for testing)")
-            registration_url = f"http://localhost:8501/?page=register&event={event_id}&admin={event_manager.admin_id}"
+            registration_url = f"https://event-manager-app.streamlit.app/?page=register&event={event_id}&admin={self.admin_id}"
             st.code(registration_url, language="text")
             st.write("This is the URL that your QR code points to.")
 
@@ -507,4 +507,5 @@ def main():
             admin_dashboard()
 
 if __name__ == "__main__":
+
     main()
